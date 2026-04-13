@@ -4,6 +4,7 @@ import os
 import threading
 import json
 import logging
+import base64
 from datetime import datetime
 from pathlib import Path
 
@@ -15,6 +16,8 @@ CONFIG = {
     "port": 8080,
     "public_dir": "public",
     "log_enabled": True,
+    "username": "admin",
+    "password": "123456",
 }
 
 def load_config():
@@ -63,6 +66,32 @@ def get_mime_type(file_path):
     """根据文件扩展名获取 MIME 类型"""
     ext = os.path.splitext(file_path)[1].lower()
     return MIME_TYPES.get(ext, 'application/octet-stream')
+
+def check_auth(headers):
+    """检查 HTTP Basic Auth 认证"""
+    auth_header = headers.get('Authorization', '')
+    if not auth_header.startswith('Basic '):
+        return False
+    encoded = auth_header[6:]
+    try:
+        decoded = base64.b64decode(encoded).decode('utf-8')
+        username, password = decoded.split(':', 1)
+        return username == CONFIG['username'] and password == CONFIG['password']
+    except:
+        return False
+
+def make_auth_response():
+    """返回 401 认证挑战响应"""
+    body = "<h1>401 Unauthorized</h1><p>需要登录</p>"
+    body_bytes = body.encode('utf-8')
+    response_line = "HTTP/1.1 401 Unauthorized\r\n"
+    response_headers = "WWW-Authenticate: Basic realm=\"HTTP Server\"\r\n"
+    response_headers += "Content-Type: text/html; charset=utf-8\r\n"
+    response_headers += f"Content-Length: {len(body_bytes)}\r\n"
+    response_headers += "Connection: close\r\n"
+    response_headers += "\r\n"
+    response = response_line.encode() + response_headers.encode() + body_bytes
+    return response
 
 # ============================================
 # 路由处理器
@@ -163,6 +192,13 @@ def handle_request(client_socket, address):
         method, path, version, headers = parse_request(request_text)
 
         log(f"{address} {method} {path}")
+
+        # 安全检查：认证验证
+        if not check_auth(headers):
+            log(f"{address} 认证失败")
+            response = make_auth_response()
+            client_socket.send(response)
+            return
 
         # 静态文件服务
         if path in ['/index.html', '/style.css', '/script.js'] or path.startswith('/static/'):
